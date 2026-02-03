@@ -332,7 +332,7 @@ checksum = "8e9489c2807c139ffd9c1794f4af0ebe86a828db53ecdc7fea2111d0fed085d1"
 
 [[package]]
 name = "llm_readability"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "auto_encoder",
  "criterion",
