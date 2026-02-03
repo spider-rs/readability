@@ -24,3 +24,8 @@ auto_encoder = "0"
 
 [dev-dependencies]
 maud = "0.26"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "extraction"
+harness = false
