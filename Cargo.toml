@@ -1,6 +1,6 @@
 [package]
 name = "llm_readability"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2021"
 description = "Readability library for LLM's built in Rust"
 keywords = ["readability", "clean-html", "safari-reader"]
@@ -16,7 +16,6 @@ documentation = "https://docs.rs/llm_readability"
 [dependencies]
 url = "2"
 markup5ever_rcdom = "0.3"
-lazy_static = "1"
 markup5ever = "0.13"
 html5ever = "0.27"
 regex = "1"

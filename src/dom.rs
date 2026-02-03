@@ -143,7 +143,7 @@ pub fn find_node(handle: &Handle, tag_name: &str, nodes: &mut Vec<Rc<Node>>) {
     }
 }
 
-pub fn has_nodes(handle: &Handle, tag_names: &Vec<&'static str>) -> bool {
+pub fn has_nodes(handle: &Handle, tag_names: &[&str]) -> bool {
     for child in handle.children.borrow().iter() {
         let tag_name: &str = &get_tag_name(&child).unwrap_or_default();
         if tag_names.iter().any(|&n| n == tag_name) {
@@ -170,4 +170,31 @@ pub fn text_children_count(handle: &Handle) -> usize {
         }
     }
     count
+}
+
+/// Count multiple tag types in a single traversal
+#[derive(Default)]
+pub struct TagCounts {
+    pub p: usize,
+    pub img: usize,
+    pub li: usize,
+    pub input: usize,
+    pub embed: usize,
+}
+
+pub fn count_tags(handle: &Handle, counts: &mut TagCounts) {
+    for child in handle.children.borrow().iter() {
+        if let Element { ref name, .. } = &child.data {
+            let t = name.local.as_ref();
+            match t {
+                "p" => counts.p += 1,
+                "img" => counts.img += 1,
+                "li" => counts.li += 1,
+                "input" => counts.input += 1,
+                "embed" => counts.embed += 1,
+                _ => {}
+            }
+            count_tags(child, counts);
+        }
+    }
 }

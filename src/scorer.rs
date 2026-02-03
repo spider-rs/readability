@@ -4,7 +4,6 @@ use html5ever::ns;
 use html5ever::tree_builder::TreeSink;
 use html5ever::tree_builder::{ElementFlags, NodeOrText};
 use html5ever::{LocalName, QualName};
-use lazy_static::lazy_static;
 use markup5ever_rcdom::Handle;
 use markup5ever_rcdom::Node;
 use markup5ever_rcdom::NodeData::{
@@ -16,6 +15,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::LazyLock;
 use url::Url;
 
 pub static PUNCTUATIONS_REGEX: &str = r"([、。，．！？]|\.[^A-Za-z0-9]|,[^0-9]|!|\?)";
@@ -32,7 +32,7 @@ pub static NEGATIVE_CANDIDATES: &str = "combx|comment|com|contact|foot|footer|fo
      |scroll|shoutbox|sidebar|sponsor|shopping\
      |tags|tool|widget|form|textfield\
      |uiScale|hidden";
-static BLOCK_CHILD_TAGS: [&str; 24] = [
+static BLOCK_CHILD_TAGS: &[&str] = &[
     "article",
     "aside",
     "blockquote",
@@ -58,13 +58,12 @@ static BLOCK_CHILD_TAGS: [&str; 24] = [
     "ol",
     "li",
 ];
-lazy_static! {
-    static ref PUNCTUATIONS: Regex = Regex::new(PUNCTUATIONS_REGEX).unwrap();
-    static ref LIKELY: Regex = Regex::new(LIKELY_CANDIDATES).unwrap();
-    static ref UNLIKELY: Regex = Regex::new(UNLIKELY_CANDIDATES).unwrap();
-    static ref POSITIVE: Regex = Regex::new(POSITIVE_CANDIDATES).unwrap();
-    static ref NEGATIVE: Regex = Regex::new(NEGATIVE_CANDIDATES).unwrap();
-}
+
+static PUNCTUATIONS: LazyLock<Regex> = LazyLock::new(|| Regex::new(PUNCTUATIONS_REGEX).unwrap());
+static LIKELY: LazyLock<Regex> = LazyLock::new(|| Regex::new(LIKELY_CANDIDATES).unwrap());
+static UNLIKELY: LazyLock<Regex> = LazyLock::new(|| Regex::new(UNLIKELY_CANDIDATES).unwrap());
+static POSITIVE: LazyLock<Regex> = LazyLock::new(|| Regex::new(POSITIVE_CANDIDATES).unwrap());
+static NEGATIVE: LazyLock<Regex> = LazyLock::new(|| Regex::new(NEGATIVE_CANDIDATES).unwrap());
 
 #[derive(Debug, Clone)]
 pub struct Candidate {
@@ -134,7 +133,7 @@ pub fn is_candidate(handle: &Handle) -> bool {
     match n {
         "p" | "h1" | "h2" => true,
         "div" | "article" | "center" | "section" | "header" => {
-            dom::has_nodes(&handle, &BLOCK_CHILD_TAGS.to_vec())
+            dom::has_nodes(handle, BLOCK_CHILD_TAGS)
         }
         _ => false,
     }
@@ -274,18 +273,22 @@ pub fn find_candidates(
     candidates: &mut BTreeMap<String, Candidate>,
     nodes: &mut BTreeMap<String, Rc<Node>>,
 ) {
-    if let Some(id) = id.to_str().map(|id| id.to_string()) {
-        nodes.insert(id, handle.clone());
+    if let Some(id_str) = id.to_str().map(|id| id.to_string()) {
+        nodes.insert(id_str, handle.clone());
     }
 
-    if is_candidate(&handle) {
-        let score = calc_content_score(&handle);
+    if is_candidate(handle) {
+        let score = calc_content_score(handle);
+
+        // Add score to parent candidate
         if let Some(c) = id
             .parent()
             .and_then(|pid| find_or_create_candidate(pid, candidates, nodes))
         {
             c.score.set(c.score.get() + score)
         }
+
+        // Add half score to grandparent candidate
         if let Some(c) = id
             .parent()
             .and_then(|pid| pid.parent())
@@ -293,31 +296,30 @@ pub fn find_candidates(
         {
             c.score.set(c.score.get() + score / 2.0)
         }
-    }
 
-    if is_candidate(&handle) {
-        let score = calc_content_score(&handle);
+        // Add score to self if already a candidate
         if let Some(c) = id
             .to_str()
-            .map(|id| id.to_string())
-            .and_then(|id| candidates.get(&id))
+            .and_then(|id_str| candidates.get(id_str))
         {
             c.score.set(c.score.get() + score)
         }
+
+        // Add score to parent if already a candidate
         if let Some(c) = id
             .parent()
             .and_then(|pid| pid.to_str())
-            .map(|id| id.to_string())
-            .and_then(|pid| candidates.get(&pid))
+            .and_then(|pid_str| candidates.get(pid_str))
         {
             c.score.set(c.score.get() + score)
         }
+
+        // Add score to grandparent if already a candidate
         if let Some(c) = id
             .parent()
             .and_then(|p| p.parent())
-            .and_then(|pid| pid.to_str())
-            .map(|id| id.to_string())
-            .and_then(|pid| candidates.get(&pid))
+            .and_then(|gpid| gpid.to_str())
+            .and_then(|gpid_str| candidates.get(gpid_str))
         {
             c.score.set(c.score.get() + score)
         }
@@ -406,8 +408,8 @@ pub fn clean(
 }
 
 pub fn is_useless(id: &Path, handle: &Handle, candidates: &BTreeMap<String, Candidate>) -> bool {
-    let tag_name = &dom::get_tag_name(&handle).unwrap_or_default();
-    let weight = get_class_weight(&handle);
+    let tag_name = &dom::get_tag_name(handle).unwrap_or_default();
+    let weight = get_class_weight(handle);
     let score = id
         .to_str()
         .and_then(|id| candidates.get(id))
@@ -416,27 +418,19 @@ pub fn is_useless(id: &Path, handle: &Handle, candidates: &BTreeMap<String, Cand
     if weight + score < 0.0 {
         return true;
     }
-    let text_nodes_len = dom::text_children_count(&handle);
+    let text_nodes_len = dom::text_children_count(handle);
 
-    let mut p_nodes: Vec<Rc<Node>> = vec![];
-    let mut img_nodes: Vec<Rc<Node>> = vec![];
-    let mut li_nodes: Vec<Rc<Node>> = vec![];
-    let mut input_nodes: Vec<Rc<Node>> = vec![];
-    let mut embed_nodes: Vec<Rc<Node>> = vec![];
+    // Count all tags in a single traversal instead of 5 separate traversals
+    let mut counts = dom::TagCounts::default();
+    dom::count_tags(handle, &mut counts);
 
-    dom::find_node(&handle, "p", &mut p_nodes);
-    dom::find_node(&handle, "img", &mut img_nodes);
-    dom::find_node(&handle, "li", &mut li_nodes);
-    dom::find_node(&handle, "input", &mut input_nodes);
-    dom::find_node(&handle, "embed", &mut embed_nodes);
-
-    let p_count = p_nodes.len();
-    let img_count = img_nodes.len();
-    let li_count = li_nodes.len() as i32 - 100;
-    let input_count = input_nodes.len();
-    let embed_count = embed_nodes.len();
-    let link_density = get_link_density(&handle);
-    let content_length = dom::text_len(&handle);
+    let p_count = counts.p;
+    let img_count = counts.img;
+    let li_count = counts.li as i32 - 100;
+    let input_count = counts.input;
+    let embed_count = counts.embed;
+    let link_density = get_link_density(handle);
+    let content_length = dom::text_len(handle);
     let para_count = text_nodes_len + p_count;
 
     if img_count > para_count + text_nodes_len {
