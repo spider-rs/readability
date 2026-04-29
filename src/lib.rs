@@ -4,6 +4,185 @@ pub mod extractor;
 pub mod rcdom;
 pub mod scorer;
 
+#[cfg(all(test, feature = "tokio"))]
+mod async_tests {
+    use super::error::Error;
+    use super::extractor;
+    use std::io;
+    use tokio::io::{AsyncRead, ReadBuf};
+
+    /// AsyncRead that yields a fixed payload one tiny chunk at a time.
+    /// Exercises the streaming sink path under fragmented reads.
+    struct ChunkedReader {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+
+    impl AsyncRead for ChunkedReader {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            let remaining = self.data.len() - self.pos;
+            if remaining == 0 {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            let n = remaining.min(self.chunk).min(buf.remaining());
+            let start = self.pos;
+            buf.put_slice(&self.data[start..start + n]);
+            self.pos += n;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// AsyncRead that errors on the second poll. Exercises the IO-error
+    /// branch of the streaming loop.
+    struct FlakyReader {
+        data: Vec<u8>,
+        pos: usize,
+        first_poll: bool,
+    }
+
+    impl AsyncRead for FlakyReader {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            if !self.first_poll {
+                return std::task::Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "flaky")));
+            }
+            self.first_poll = false;
+            let remaining = self.data.len() - self.pos;
+            let n = remaining.min(buf.remaining());
+            let start = self.pos;
+            buf.put_slice(&self.data[start..start + n]);
+            self.pos += n;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    fn small_html() -> String {
+        r#"<!DOCTYPE html><html lang="en"><head><title>Tiny</title></head>
+<body><article><h1>Tiny Heading</h1>
+<p>First paragraph with sufficient prose for the readability scorer to consider it.</p>
+<p>Second paragraph adds weight so this article wins as the top candidate.</p>
+<p>Third paragraph for additional content scoring.</p>
+</article></body></html>"#
+            .to_string()
+    }
+
+    fn large_html() -> String {
+        // Build a payload >> ASYNC_BYTE_THRESHOLD (128 KiB) to force the
+        // streaming/spawn_blocking path.
+        let mut out = String::from(
+            r#"<!DOCTYPE html><html lang="en"><head><title>Big Article</title></head><body><article><h1>Big Heading</h1>"#,
+        );
+        for i in 0..2000 {
+            out.push_str(&format!(
+                "<p>Paragraph number {} with enough text to score, lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>",
+                i
+            ));
+        }
+        out.push_str("</article></body></html>");
+        assert!(
+            out.len() > extractor::ASYNC_BYTE_THRESHOLD,
+            "fixture must exceed threshold"
+        );
+        out
+    }
+
+    #[tokio::test]
+    async fn extract_async_small_inline() {
+        let html = small_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let product = extractor::extract_async(html.into_bytes(), url)
+            .await
+            .unwrap();
+        assert!(product.content.contains("Tiny Heading"));
+        assert!(product.text.contains("First paragraph"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn extract_async_large_offloaded() {
+        let html = large_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let product = extractor::extract_async(html.into_bytes(), url)
+            .await
+            .unwrap();
+        assert!(product.content.contains("Big Heading"));
+        assert!(product.text.contains("Paragraph number 0"));
+        assert!(product.text.contains("Paragraph number 1999"));
+    }
+
+    #[tokio::test]
+    async fn extract_async_reader_small_inline() {
+        let html = small_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let reader = ChunkedReader {
+            data: html.into_bytes(),
+            pos: 0,
+            chunk: 1024,
+        };
+        let product = extractor::extract_async_reader(reader, url).await.unwrap();
+        assert!(product.content.contains("Tiny Heading"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn extract_async_reader_large_streaming() {
+        let html = large_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        // Tiny chunk size to stress the streaming sink and channel backpressure.
+        let reader = ChunkedReader {
+            data: html.into_bytes(),
+            pos: 0,
+            chunk: 4096,
+        };
+        let product = extractor::extract_async_reader(reader, url).await.unwrap();
+        assert!(product.content.contains("Big Heading"));
+        assert!(product.text.contains("Paragraph number 0"));
+        assert!(product.text.contains("Paragraph number 1999"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn extract_async_reader_io_error_after_threshold() {
+        // Payload larger than threshold so we cross into the streaming path,
+        // then the reader errors on the next poll.
+        let html = large_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let reader = FlakyReader {
+            data: html.into_bytes(),
+            pos: 0,
+            first_poll: true,
+        };
+        let result = extractor::extract_async_reader(reader, url).await;
+        // Either we read everything before the error (if the first poll
+        // covered the whole body) or we surface the IO error. Both are
+        // acceptable; the critical guarantee is that the future completes
+        // — no hang, no panic.
+        match result {
+            Ok(_) => {}
+            Err(Error::IOError(_)) => {}
+            Err(Error::Unexpected) => {}
+            Err(other) => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_async_matches_sync_output() {
+        let html = small_html();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let sync_product = extractor::extract(&mut html.as_bytes(), &url).unwrap();
+        let async_product = extractor::extract_async(html.into_bytes(), url)
+            .await
+            .unwrap();
+        assert_eq!(sync_product.content, async_product.content);
+        assert_eq!(sync_product.text, async_product.text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,7 +403,9 @@ mod tests {
         let url = url::Url::parse("https://example.com/articles/test").unwrap();
         let result = extractor::extract(&mut html.as_bytes(), &url).unwrap();
 
-        assert!(result.content.contains("https://example.com/images/photo.jpg"));
+        assert!(result
+            .content
+            .contains("https://example.com/images/photo.jpg"));
     }
 
     #[test]
@@ -530,7 +711,9 @@ fn main() {
         let url = url::Url::parse("https://example.com/path/to/article").unwrap();
         let result = extractor::extract(&mut html.as_bytes(), &url).unwrap();
 
-        assert!(result.content.contains(r#"<base href="https://example.com/path/to/article">"#));
+        assert!(result
+            .content
+            .contains(r#"<base href="https://example.com/path/to/article">"#));
     }
 
     #[test]
@@ -659,7 +842,8 @@ mod dom_tests {
 
     #[test]
     fn test_get_attr() {
-        let dom = parse_html(r#"<html><body><div id="main" class="container">test</div></body></html>"#);
+        let dom =
+            parse_html(r#"<html><body><div id="main" class="container">test</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
         assert_eq!(dom::get_attr("id", &div), Some("main".to_string()));
         assert_eq!(dom::get_attr("class", &div), Some("container".to_string()));
@@ -696,7 +880,9 @@ mod dom_tests {
 
     #[test]
     fn test_find_node() {
-        let dom = parse_html("<html><body><div><a href='#'>Link 1</a><a href='#'>Link 2</a></div></body></html>");
+        let dom = parse_html(
+            "<html><body><div><a href='#'>Link 1</a><a href='#'>Link 2</a></div></body></html>",
+        );
         let div = find_element(&dom.document, "div").unwrap();
         let mut links = vec![];
         dom::find_node(&div, "a", &mut links);
@@ -756,10 +942,7 @@ mod scorer_tests {
             .unwrap()
     }
 
-    fn find_element(
-        handle: &crate::rcdom::Handle,
-        tag: &str,
-    ) -> Option<crate::rcdom::Handle> {
+    fn find_element(handle: &crate::rcdom::Handle, tag: &str) -> Option<crate::rcdom::Handle> {
         if let Some(name) = dom::get_tag_name(handle) {
             if name == tag {
                 return Some(handle.clone());
@@ -775,7 +958,8 @@ mod scorer_tests {
 
     #[test]
     fn test_is_candidate_paragraph() {
-        let dom = parse_html("<html><body><p>This is enough text to be considered.</p></body></html>");
+        let dom =
+            parse_html("<html><body><p>This is enough text to be considered.</p></body></html>");
         let p = find_element(&dom.document, "p").unwrap();
         assert!(scorer::is_candidate(&p));
     }
@@ -789,7 +973,8 @@ mod scorer_tests {
 
     #[test]
     fn test_get_class_weight_positive() {
-        let dom = parse_html(r#"<html><body><div class="article content">Test</div></body></html>"#);
+        let dom =
+            parse_html(r#"<html><body><div class="article content">Test</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
         let weight = scorer::get_class_weight(&div);
         assert!(weight > 0.0);
@@ -797,7 +982,8 @@ mod scorer_tests {
 
     #[test]
     fn test_get_class_weight_negative() {
-        let dom = parse_html(r#"<html><body><div class="sidebar comment">Test</div></body></html>"#);
+        let dom =
+            parse_html(r#"<html><body><div class="sidebar comment">Test</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
         let weight = scorer::get_class_weight(&div);
         assert!(weight < 0.0);
@@ -837,7 +1023,9 @@ mod scorer_tests {
 
     #[test]
     fn test_get_link_density() {
-        let dom = parse_html("<html><body><div>Regular text <a href='#'>link</a> more text</div></body></html>");
+        let dom = parse_html(
+            "<html><body><div>Regular text <a href='#'>link</a> more text</div></body></html>",
+        );
         let div = find_element(&dom.document, "div").unwrap();
         let density = scorer::get_link_density(&div);
         assert!(density > 0.0);
@@ -923,7 +1111,8 @@ mod scorer_tests {
 
     #[test]
     fn test_is_candidate_div_with_block_children() {
-        let dom = parse_html("<html><body><div><p>Some paragraph content here</p></div></body></html>");
+        let dom =
+            parse_html("<html><body><div><p>Some paragraph content here</p></div></body></html>");
         let div = find_element(&dom.document, "div").unwrap();
         assert!(scorer::is_candidate(&div));
     }
@@ -999,7 +1188,9 @@ mod scorer_tests {
 
     #[test]
     fn test_calc_content_score_japanese_punctuation() {
-        let dom = parse_html("<html><body><p>これは日本語です。テストです！質問ですか？</p></body></html>");
+        let dom = parse_html(
+            "<html><body><p>これは日本語です。テストです！質問ですか？</p></body></html>",
+        );
         let p = find_element(&dom.document, "p").unwrap();
         let score = scorer::calc_content_score(&p);
         assert!(score > 1.0);
@@ -1015,7 +1206,8 @@ mod scorer_tests {
 
     #[test]
     fn test_fix_img_path_absolute_url() {
-        let dom = parse_html(r#"<html><body><img src="https://other.com/image.jpg"></body></html>"#);
+        let dom =
+            parse_html(r#"<html><body><img src="https://other.com/image.jpg"></body></html>"#);
         let img = find_element(&dom.document, "img").unwrap();
         let url = url::Url::parse("https://example.com/article").unwrap();
 
@@ -1038,7 +1230,8 @@ mod scorer_tests {
 
     #[test]
     fn test_fix_anchor_path_absolute_url() {
-        let dom = parse_html(r#"<html><body><a href="https://other.com/page">Link</a></body></html>"#);
+        let dom =
+            parse_html(r#"<html><body><a href="https://other.com/page">Link</a></body></html>"#);
         let a = find_element(&dom.document, "a").unwrap();
         let url = url::Url::parse("https://example.com/article").unwrap();
 
@@ -1061,7 +1254,8 @@ mod scorer_tests {
 
     #[test]
     fn test_preprocess_removes_scripts() {
-        let html = "<html><head><script>alert('test');</script></head><body><p>Content</p></body></html>";
+        let html =
+            "<html><head><script>alert('test');</script></head><body><p>Content</p></body></html>";
         let mut dom = parse_html(html);
         let mut title = String::new();
         let mut lang = String::new();
@@ -1185,10 +1379,7 @@ mod dom_attr_tests {
             .unwrap()
     }
 
-    fn find_element(
-        handle: &crate::rcdom::Handle,
-        tag: &str,
-    ) -> Option<crate::rcdom::Handle> {
+    fn find_element(handle: &crate::rcdom::Handle, tag: &str) -> Option<crate::rcdom::Handle> {
         if let Some(name) = dom::get_tag_name(handle) {
             if name == tag {
                 return Some(handle.clone());
@@ -1250,7 +1441,9 @@ mod dom_attr_tests {
 
     #[test]
     fn test_attr_function() {
-        let dom = parse_html(r#"<html><body><div id="my-id" class="my-class">Content</div></body></html>"#);
+        let dom = parse_html(
+            r#"<html><body><div id="my-id" class="my-class">Content</div></body></html>"#,
+        );
         let div = find_element(&dom.document, "div").unwrap();
 
         if let crate::rcdom::NodeData::Element { ref attrs, .. } = div.data {
@@ -1303,7 +1496,8 @@ mod dom_attr_tests {
 
     #[test]
     fn test_find_node_nested() {
-        let dom = parse_html("<html><body><div><div><a href='#'>Link</a></div></div></body></html>");
+        let dom =
+            parse_html("<html><body><div><div><a href='#'>Link</a></div></div></body></html>");
         let body = find_element(&dom.document, "body").unwrap();
         let mut links = vec![];
         dom::find_node(&body, "a", &mut links);
@@ -1320,7 +1514,8 @@ mod dom_attr_tests {
 
     #[test]
     fn test_extract_text_deep_nesting() {
-        let dom = parse_html("<html><body><div><span><em>Deep</em> text</span></div></body></html>");
+        let dom =
+            parse_html("<html><body><div><span><em>Deep</em> text</span></div></body></html>");
         let div = find_element(&dom.document, "div").unwrap();
         let mut text = String::new();
         dom::extract_text(&div, &mut text, true);

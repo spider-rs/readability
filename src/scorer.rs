@@ -295,10 +295,7 @@ pub fn find_candidates(
         }
 
         // Add score to self if already a candidate
-        if let Some(c) = id
-            .to_str()
-            .and_then(|id_str| candidates.get(id_str))
-        {
+        if let Some(c) = id.to_str().and_then(|id_str| candidates.get(id_str)) {
             c.score.set(c.score.get() + score)
         }
 

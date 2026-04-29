@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use std::hint::black_box;
 use llm_readability::extractor;
+use std::hint::black_box;
 use url::Url;
 
 /// Simple article HTML for baseline benchmarking
@@ -271,16 +271,12 @@ fn bench_document_size(c: &mut Criterion) {
     for para_count in [10, 50, 100, 500].iter() {
         let html = large_document(*para_count);
         group.throughput(Throughput::Bytes(html.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(para_count),
-            &html,
-            |b, html| {
-                b.iter(|| {
-                    let mut input = black_box(html.as_bytes());
-                    extractor::extract(&mut input, &url).unwrap()
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(para_count), &html, |b, html| {
+            b.iter(|| {
+                let mut input = black_box(html.as_bytes());
+                extractor::extract(&mut input, &url).unwrap()
+            })
+        });
     }
     group.finish();
 }
