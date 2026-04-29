@@ -1,6 +1,7 @@
 pub mod dom;
 pub mod error;
 pub mod extractor;
+pub mod rcdom;
 pub mod scorer;
 
 #[cfg(test)]
@@ -621,9 +622,9 @@ fn main() {
 #[cfg(test)]
 mod dom_tests {
     use super::*;
+    use crate::rcdom::RcDom;
     use html5ever::parse_document;
     use html5ever::tendril::TendrilSink;
-    use markup5ever_rcdom::RcDom;
 
     fn parse_html(html: &str) -> RcDom {
         parse_document(RcDom::default(), Default::default())
@@ -633,9 +634,9 @@ mod dom_tests {
     }
 
     fn find_element<'a>(
-        handle: &'a markup5ever_rcdom::Handle,
+        handle: &'a crate::rcdom::Handle,
         tag: &str,
-    ) -> Option<markup5ever_rcdom::Handle> {
+    ) -> Option<crate::rcdom::Handle> {
         if let Some(name) = dom::get_tag_name(handle) {
             if name == tag {
                 return Some(handle.clone());
@@ -744,9 +745,9 @@ mod dom_tests {
 #[cfg(test)]
 mod scorer_tests {
     use super::*;
+    use crate::rcdom::RcDom;
     use html5ever::parse_document;
     use html5ever::tendril::TendrilSink;
-    use markup5ever_rcdom::RcDom;
 
     fn parse_html(html: &str) -> RcDom {
         parse_document(RcDom::default(), Default::default())
@@ -756,9 +757,9 @@ mod scorer_tests {
     }
 
     fn find_element(
-        handle: &markup5ever_rcdom::Handle,
+        handle: &crate::rcdom::Handle,
         tag: &str,
-    ) -> Option<markup5ever_rcdom::Handle> {
+    ) -> Option<crate::rcdom::Handle> {
         if let Some(name) = dom::get_tag_name(handle) {
             if name == tag {
                 return Some(handle.clone());
@@ -1173,9 +1174,9 @@ mod error_tests {
 #[cfg(test)]
 mod dom_attr_tests {
     use super::*;
+    use crate::rcdom::RcDom;
     use html5ever::parse_document;
     use html5ever::tendril::TendrilSink;
-    use markup5ever_rcdom::RcDom;
 
     fn parse_html(html: &str) -> RcDom {
         parse_document(RcDom::default(), Default::default())
@@ -1185,9 +1186,9 @@ mod dom_attr_tests {
     }
 
     fn find_element(
-        handle: &markup5ever_rcdom::Handle,
+        handle: &crate::rcdom::Handle,
         tag: &str,
-    ) -> Option<markup5ever_rcdom::Handle> {
+    ) -> Option<crate::rcdom::Handle> {
         if let Some(name) = dom::get_tag_name(handle) {
             if name == tag {
                 return Some(handle.clone());
@@ -1226,7 +1227,7 @@ mod dom_attr_tests {
         let dom = parse_html(r#"<html><body><div class="test-class">Content</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
 
-        if let markup5ever_rcdom::NodeData::Element { ref attrs, .. } = div.data {
+        if let crate::rcdom::NodeData::Element { ref attrs, .. } = div.data {
             let mut attrs_mut = attrs.borrow_mut();
             assert!(dom::attr("class", &attrs_mut).is_some());
             dom::clean_attr("class", &mut attrs_mut);
@@ -1239,7 +1240,7 @@ mod dom_attr_tests {
         let dom = parse_html(r#"<html><body><div id="test-id">Content</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
 
-        if let markup5ever_rcdom::NodeData::Element { ref attrs, .. } = div.data {
+        if let crate::rcdom::NodeData::Element { ref attrs, .. } = div.data {
             let mut attrs_mut = attrs.borrow_mut();
             let initial_len = attrs_mut.len();
             dom::clean_attr("class", &mut attrs_mut);
@@ -1252,7 +1253,7 @@ mod dom_attr_tests {
         let dom = parse_html(r#"<html><body><div id="my-id" class="my-class">Content</div></body></html>"#);
         let div = find_element(&dom.document, "div").unwrap();
 
-        if let markup5ever_rcdom::NodeData::Element { ref attrs, .. } = div.data {
+        if let crate::rcdom::NodeData::Element { ref attrs, .. } = div.data {
             let attrs_ref = attrs.borrow();
             assert_eq!(dom::attr("id", &attrs_ref), Some("my-id".to_string()));
             assert_eq!(dom::attr("class", &attrs_ref), Some("my-class".to_string()));

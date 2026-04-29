@@ -1,7 +1,7 @@
+use crate::rcdom::NodeData::{Element, Text};
+use crate::rcdom::{Handle, Node};
 use html5ever::tendril::StrTendril;
 use html5ever::Attribute;
-use markup5ever_rcdom::NodeData::{Element, Text};
-use markup5ever_rcdom::{Handle, Node};
 use std::rc::Rc;
 use std::str::FromStr;
 

@@ -1,15 +1,12 @@
 use super::dom;
-use html5ever::namespace_url;
+use crate::rcdom::Handle;
+use crate::rcdom::Node;
+use crate::rcdom::NodeData::{Comment, Doctype, Document, Element, ProcessingInstruction, Text};
+use crate::rcdom::RcDom;
 use html5ever::ns;
 use html5ever::tree_builder::TreeSink;
 use html5ever::tree_builder::{ElementFlags, NodeOrText};
 use html5ever::{LocalName, QualName};
-use markup5ever_rcdom::Handle;
-use markup5ever_rcdom::Node;
-use markup5ever_rcdom::NodeData::{
-    Comment, Doctype, Document, Element, ProcessingInstruction, Text,
-};
-use markup5ever_rcdom::RcDom;
 use regex::Regex;
 use std::cell::Cell;
 use std::collections::BTreeMap;

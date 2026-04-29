@@ -1,6 +1,6 @@
 [package]
 name = "llm_readability"
-version = "0.0.13"
+version = "0.0.14"
 edition = "2021"
 description = "Readability library for LLM's built in Rust"
 keywords = ["readability", "clean-html", "safari-reader"]
@@ -15,15 +15,15 @@ documentation = "https://docs.rs/llm_readability"
 
 [dependencies]
 url = "2"
-markup5ever_rcdom = "0.3"
-markup5ever = "0.13"
-html5ever = "0.27"
+html5ever = "0.39"
+markup5ever = "0.39"
+tendril = "0.5"
 regex = "1"
-auto_encoder = "0"
+auto_encoder = "0.2"
 
 [dev-dependencies]
-maud = "0.26"
-criterion = { version = "0.5", features = ["html_reports"] }
+maud = "0.27"
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "extraction"

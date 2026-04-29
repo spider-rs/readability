@@ -1,9 +1,9 @@
 use super::dom;
 use super::error::Error;
 use super::scorer;
+use crate::rcdom::{RcDom, SerializableHandle};
 use html5ever::tendril::stream::TendrilSink;
 use html5ever::{parse_document, serialize};
-use markup5ever_rcdom::{RcDom, SerializableHandle};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::default::Default;
