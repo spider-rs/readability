@@ -179,14 +179,33 @@ where
 {
     let mut sink: Utf8LossyDecoder<Parser<RcDom>> =
         parse_document(RcDom::default(), Default::default()).from_utf8();
-    let mut buf = vec![0u8; STREAM_READ_CHUNK];
     let mut since_yield = 0usize;
     loop {
-        let n = reader.read(&mut buf).await?;
+        // Read directly into a fresh tendril — no intermediate buffer copy.
+        // Same pattern `TendrilSink::read_from` uses for sync reads.
+        let mut tendril = Tendril::<tendril_fmt::Bytes>::new();
+        // SAFETY: `push_uninitialized` reserves `STREAM_READ_CHUNK` bytes that
+        // are immediately filled by `reader.read`, then trimmed back to the
+        // actual read length via `pop_back`. Tendril is consumed by
+        // `sink.process` only after trimming, so no uninitialized memory is
+        // ever observed. On error/EOF the tendril is fully popped before drop.
+        unsafe { tendril.push_uninitialized(STREAM_READ_CHUNK as u32) };
+        let n = match reader.read(&mut tendril).await {
+            Ok(n) => n,
+            Err(e) => {
+                tendril.pop_back(STREAM_READ_CHUNK as u32);
+                return Err(Error::IOError(e));
+            }
+        };
         if n == 0 {
+            tendril.pop_back(STREAM_READ_CHUNK as u32);
             break;
         }
-        sink.process(Tendril::<tendril_fmt::Bytes>::from_slice(&buf[..n]));
+        debug_assert!(n <= STREAM_READ_CHUNK);
+        let trim = (STREAM_READ_CHUNK as u32).saturating_sub(n as u32);
+        tendril.pop_back(trim);
+        sink.process(tendril);
+
         since_yield += n;
         // If the underlying reader keeps returning Ready (e.g. an in-memory
         // AsyncRead), insert an explicit yield once we've accumulated more
