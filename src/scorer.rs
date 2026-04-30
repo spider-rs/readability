@@ -11,7 +11,7 @@ use regex::Regex;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use url::Url;
 
@@ -65,7 +65,7 @@ static NEGATIVE: LazyLock<Regex> = LazyLock::new(|| Regex::new(NEGATIVE_CANDIDAT
 #[derive(Debug, Clone)]
 pub struct Candidate {
     /// The node of the candidate.
-    pub node: Rc<Node>,
+    pub node: Arc<Node>,
     /// The score.
     pub score: Cell<f32>,
 }
@@ -110,7 +110,7 @@ pub fn get_link_density(handle: &Handle) -> f32 {
         return 0.0;
     }
     let mut link_length = 0.0;
-    let mut links: Vec<Rc<Node>> = vec![];
+    let mut links: Vec<Arc<Node>> = vec![];
 
     dom::find_node(&handle, "a", &mut links);
     for link in links.iter() {
@@ -268,7 +268,7 @@ pub fn find_candidates(
     id: &Path,
     handle: &Handle,
     candidates: &mut BTreeMap<String, Candidate>,
-    nodes: &mut BTreeMap<String, Rc<Node>>,
+    nodes: &mut BTreeMap<String, Arc<Node>>,
 ) {
     if let Some(id_str) = id.to_str().map(|id| id.to_string()) {
         nodes.insert(id_str, handle.clone());
@@ -328,7 +328,7 @@ pub fn find_candidates(
 fn find_or_create_candidate<'a>(
     id: &Path,
     candidates: &'a mut BTreeMap<String, Candidate>,
-    nodes: &BTreeMap<String, Rc<Node>>,
+    nodes: &BTreeMap<String, Arc<Node>>,
 ) -> Option<&'a Candidate> {
     if let Some(id_str) = id.to_str() {
         if let Some(node) = nodes.get(id_str) {

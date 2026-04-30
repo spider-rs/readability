@@ -18,7 +18,7 @@ use std::default::Default;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::rc::{Rc, Weak};
+use std::sync::{Arc, Weak};
 
 use tendril::StrTendril;
 
@@ -65,16 +65,41 @@ pub struct Node {
     pub data: NodeData,
 }
 
+// SAFETY: `Node` contains `Cell` and `RefCell`, which are `!Sync` in the
+// general case. We manually assert `Send + Sync` here to make
+// `Arc<Node>: Send` (which requires `Node: Send + Sync`), which in turn
+// makes the whole html5ever parser stack `Send` for use across `.await`
+// points on a multi-threaded async runtime.
+//
+// The soundness invariant is: a `Node` (and any `Handle = Arc<Node>` or
+// `WeakHandle = Weak<Node>` referencing it) is owned by exactly one task
+// at a time. The `extract` / `extract_async` pipeline upholds this — the
+// tree is built by the parser, traversed by the scorer, mutated by the
+// cleaner, and serialized, all on a single logical task. The future may
+// be moved between worker threads by tokio's work-stealing scheduler, but
+// only one thread polls it at any instant, so no two threads ever access
+// the same `Node` simultaneously.
+//
+// Cloning a `Handle` and sending one clone to another thread *while the
+// original is still in use on the source thread* is undefined behavior.
+// Don't do that. The `extract` pipeline never does this.
+//
+// `StrTendril` (= `Tendril<UTF8, Atomic>` via spider-tendril) is already
+// `Send + Sync`, so the tendrils stored inside `NodeData` impose no
+// additional constraint.
+unsafe impl Send for Node {}
+unsafe impl Sync for Node {}
+
 impl Node {
-    pub fn new(data: NodeData) -> Rc<Self> {
-        Rc::new(Node {
+    pub fn new(data: NodeData) -> Arc<Self> {
+        Arc::new(Node {
             data,
             parent: Cell::new(None),
             children: RefCell::new(Vec::new()),
         })
     }
 
-    fn get_option_element_nearest_ancestor_select(&self) -> Option<Rc<Self>> {
+    fn get_option_element_nearest_ancestor_select(&self) -> Option<Arc<Self>> {
         let mut did_see_ancestor_optgroup = false;
 
         let mut current = self.parent().and_then(|parent| parent.upgrade())?;
@@ -114,7 +139,7 @@ impl Node {
         parent
     }
 
-    fn get_a_selects_enabled_selectedcontent(&self) -> Option<Rc<Self>> {
+    fn get_a_selects_enabled_selectedcontent(&self) -> Option<Arc<Self>> {
         let NodeData::Element { name, attrs, .. } = &self.data else {
             panic!("Trying to get selectedcontent of non-element");
         };
@@ -146,7 +171,7 @@ impl Node {
         Some(selectedcontent)
     }
 
-    fn clone_an_option_into_selectedcontent(&self, selectedcontent: Rc<Self>) {
+    fn clone_an_option_into_selectedcontent(&self, selectedcontent: Arc<Self>) {
         let mut document_fragment = Vec::new();
 
         for child in self.children.borrow().iter() {
@@ -157,14 +182,14 @@ impl Node {
         *selectedcontent.children.borrow_mut() = document_fragment;
     }
 
-    fn clone_with_subtree(&self) -> Rc<Self> {
+    fn clone_with_subtree(&self) -> Arc<Self> {
         let children = self
             .children
             .borrow()
             .iter()
             .map(|child| child.clone_with_subtree())
             .collect();
-        Rc::new(Self {
+        Arc::new(Self {
             parent: Cell::new(self.parent()),
             data: self.data.clone(),
             children: RefCell::new(children),
@@ -200,11 +225,11 @@ impl fmt::Debug for Node {
     }
 }
 
-pub type Handle = Rc<Node>;
+pub type Handle = Arc<Node>;
 pub type WeakHandle = Weak<Node>;
 
 fn append(new_parent: &Handle, child: Handle) {
-    let previous_parent = child.parent.replace(Some(Rc::downgrade(new_parent)));
+    let previous_parent = child.parent.replace(Some(Arc::downgrade(new_parent)));
     assert!(previous_parent.is_none());
     new_parent.children.borrow_mut().push(child);
 }
@@ -218,7 +243,7 @@ fn get_parent_and_index(target: &Handle) -> Option<(Handle, usize)> {
             .borrow()
             .iter()
             .enumerate()
-            .find(|&(_, child)| Rc::ptr_eq(child, target))
+            .find(|&(_, child)| Arc::ptr_eq(child, target))
         {
             Some((i, _)) => i,
             None => panic!("have parent but couldn't find in parent's children!"),
@@ -294,7 +319,7 @@ impl TreeSink for RcDom {
     }
 
     fn same_node(&self, x: &Handle, y: &Handle) -> bool {
-        Rc::ptr_eq(x, y)
+        Arc::ptr_eq(x, y)
     }
 
     fn elem_name<'a>(&self, target: &'a Handle) -> ExpandedName<'a> {
@@ -371,7 +396,7 @@ impl TreeSink for RcDom {
 
         remove_from_parent(&child);
 
-        child.parent.set(Some(Rc::downgrade(&parent)));
+        child.parent.set(Some(Arc::downgrade(&parent)));
         parent.children.borrow_mut().insert(i, child);
     }
 
@@ -434,8 +459,8 @@ impl TreeSink for RcDom {
         let mut children = node.children.borrow_mut();
         let mut new_children = new_parent.children.borrow_mut();
         for child in children.iter() {
-            let previous_parent = child.parent.replace(Some(Rc::downgrade(new_parent)));
-            assert!(Rc::ptr_eq(
+            let previous_parent = child.parent.replace(Some(Arc::downgrade(new_parent)));
+            assert!(Arc::ptr_eq(
                 node,
                 &previous_parent.unwrap().upgrade().expect("dangling weak")
             ))

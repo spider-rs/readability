@@ -1,6 +1,6 @@
 [package]
 name = "llm_readability"
-version = "0.0.16"
+version = "0.0.17"
 edition = "2021"
 description = "Readability library for LLM's built in Rust"
 keywords = ["readability", "clean-html", "safari-reader"]
@@ -15,9 +15,9 @@ documentation = "https://docs.rs/llm_readability"
 
 [dependencies]
 url = "2"
-html5ever = "0.39"
-markup5ever = "0.39"
-tendril = "0.5"
+html5ever = { version = "0.39", package = "spider-html5ever" }
+markup5ever = { version = "0.39", package = "spider-markup5ever" }
+tendril = { version = "0.5", package = "spider-tendril" }
 regex = "1"
 auto_encoder = "0.2"
 tokio = { version = "1", default-features = false, features = ["rt", "io-util", "sync"], optional = true }

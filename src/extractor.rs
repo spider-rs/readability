@@ -134,9 +134,9 @@ pub fn process_dom(mut dom: RcDom, url: &Url) -> Result<Product, Error> {
 /// html5ever's [`TendrilSink`] and call [`tokio::task::yield_now`] between
 /// each chunk so the executor stays responsive.
 ///
-/// The returned future is `!Send` because [`RcDom`] uses `Rc<RefCell<…>>`.
-/// Run it on a `current_thread` runtime, in a [`tokio::task::LocalSet`],
-/// or via [`tokio::task::spawn_local`].
+/// The returned future is `Send` (via the `spider-html5ever` /
+/// `spider-tendril` fork stack), so it can be `tokio::spawn`-ed onto a
+/// multi-threaded runtime.
 #[cfg(feature = "tokio")]
 pub async fn extract_async(bytes: Vec<u8>, url: Url) -> Result<Product, Error> {
     let mut sink: Utf8LossyDecoder<Parser<RcDom>> =
@@ -169,9 +169,9 @@ pub async fn extract_async(bytes: Vec<u8>, url: Url) -> Result<Product, Error> {
 /// `await` on each `reader.read()` is the cooperative yield point — there is
 /// no thread hop, no `spawn_blocking`, no channel.
 ///
-/// The returned future is `!Send` because the parser/[`RcDom`] use
-/// `Rc<RefCell<…>>`. Run it on a `current_thread` runtime, in a
-/// [`tokio::task::LocalSet`], or via [`tokio::task::spawn_local`].
+/// The returned future is `Send` whenever `R: Send` (via the
+/// `spider-html5ever` / `spider-tendril` fork stack), so it can be
+/// `tokio::spawn`-ed onto a multi-threaded runtime.
 #[cfg(feature = "tokio")]
 pub async fn extract_async_reader<R>(mut reader: R, url: Url) -> Result<Product, Error>
 where

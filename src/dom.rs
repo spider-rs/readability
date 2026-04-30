@@ -2,7 +2,7 @@ use crate::rcdom::NodeData::{Element, Text};
 use crate::rcdom::{Handle, Node};
 use html5ever::tendril::StrTendril;
 use html5ever::Attribute;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::str::FromStr;
 
 pub fn get_tag_name(handle: &Handle) -> Option<String> {
@@ -131,7 +131,7 @@ pub fn text_len(handle: &Handle) -> usize {
     len
 }
 
-pub fn find_node(handle: &Handle, tag_name: &str, nodes: &mut Vec<Rc<Node>>) {
+pub fn find_node(handle: &Handle, tag_name: &str, nodes: &mut Vec<Arc<Node>>) {
     for child in handle.children.borrow().iter() {
         if let Element { ref name, .. } = &child.data {
             let t = name.local.as_ref();

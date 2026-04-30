@@ -11,6 +11,27 @@ mod async_tests {
     use std::io;
     use tokio::io::{AsyncRead, ReadBuf};
 
+    /// Compile-time assertion that the async futures are `Send`. This is the
+    /// whole point of depending on `spider-html5ever` / `spider-tendril`: the
+    /// returned futures hold the parser across `.await` points, and the
+    /// parser stack must be `Send` for `tokio::spawn` on a multi-threaded
+    /// runtime to compile.
+    #[test]
+    fn async_futures_are_send() {
+        fn assert_send<T: Send>(_: &T) {}
+
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let bytes = b"<!doctype html><html><body><p>x</p></body></html>".to_vec();
+        let fut = extractor::extract_async(bytes, url.clone());
+        assert_send(&fut);
+
+        // The reader future is `Send` whenever the reader itself is `Send`.
+        // tokio::io::Empty is Send, so this composes.
+        let reader = tokio::io::empty();
+        let fut = extractor::extract_async_reader(reader, url);
+        assert_send(&fut);
+    }
+
     /// AsyncRead that yields a fixed payload one tiny chunk at a time.
     /// Exercises the streaming sink path under fragmented reads.
     struct ChunkedReader {
